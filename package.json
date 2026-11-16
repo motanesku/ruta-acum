@@ -1,0 +1,14 @@
+{
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "wrangler": "^4.162.0"
+  },
+  "name": "ruta-acum",
+  "scripts": {
+    "dev": "wrangler dev --ip 127.0.0.1 --port 8787",
+    "e2e": "node scripts/e2e.mjs",
+    "bench": "node scripts/bench-decode.mjs && node scripts/bench-cold.mjs",
+    "routes": "node scripts/build-routes.mjs"
+  }
+}

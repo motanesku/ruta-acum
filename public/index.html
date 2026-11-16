@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f5c55">
+<title>Ruta Acum</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="status">
+    <span id="gps" class="pill">GPS…</span>
+    <span id="updated" class="muted"></span>
+  </div>
+  <button id="refresh" class="icon" aria-label="Reîmprospătează">⟳</button>
+</header>
+
+<div id="banner" class="banner" hidden></div>
+
+<main>
+  <div id="map" aria-label="Hartă"></div>
+  <section id="results" aria-live="polite">
+    <p class="hint">Alege unde mergi, de jos.</p>
+  </section>
+  <footer class="credits">
+    Rute: <a href="https://transitous.org/" target="_blank" rel="noopener">Transitous</a>
+    (<a href="https://transitous.org/sources/" target="_blank" rel="noopener">surse de date</a>,
+    <a href="https://transitous.org/donate/" target="_blank" rel="noopener">donează</a>) ·
+    Live: STB / Metrorex prin <a href="https://tpbi.ro/" target="_blank" rel="noopener">TPBI</a> ·
+    Hartă și adrese © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">contribuitorii OpenStreetMap</a>
+    (Nominatim, OSRM) ·
+    Lime nu publică date pentru București: trotineta e o estimare ·
+    <a href="https://github.com/motanesku/ruta-acum" target="_blank" rel="noopener">cod sursă</a>
+  </footer>
+</main>
+
+<nav class="dock">
+  <div class="from">
+    <label for="fromSel">Plec de la</label>
+    <select id="fromSel">
+      <option value="gps">poziția mea (GPS)</option>
+      <option value="acasa">Acasă</option>
+      <option value="gradinita">Grădiniță</option>
+      <option value="birou">Birou</option>
+    </select>
+  </div>
+  <div class="grid">
+    <button data-go="acasa">Acasă</button>
+    <button data-go="gradinita">Grădiniță</button>
+    <button data-go="birou">Birou</button>
+    <button data-go="dimineata" class="trip">Dimineața<small>Grădiniță → Birou</small></button>
+    <button data-go="seara" class="trip">Seara<small>Grădiniță → Acasă</small></button>
+    <button id="openSettings" class="settings" aria-label="Setări">⚙</button>
+  </div>
+</nav>
+
+<dialog id="settings">
+  <form method="dialog" id="settingsForm">
+    <h2>Setări</h2>
+    <p class="muted small">Adresele rămân doar pe acest telefon (localStorage). Nu sunt trimise nicăieri în afară de căutarea adresei.</p>
+    <div id="places"></div>
+    <h3>Acces</h3>
+    <label class="row">Cheie de acces <span><input type="password" name="key" autocomplete="off" class="key"></span></label>
+    <h3>Tronsoane cu copilul (fără trotinetă)</h3>
+    <div id="segs"></div>
+    <h3>Traseu</h3>
+    <label class="row">Oprire la grădiniță <span><input type="number" name="stop" min="0" max="60" inputmode="numeric"> min</span></label>
+    <label class="row">Găsit + deblocat trotineta <span><input type="number" name="unlock" min="0" max="30" inputmode="numeric"> min</span></label>
+    <label class="row">Viteză trotinetă <span><input type="number" name="kmh" min="5" max="25" inputmode="numeric"> km/h</span></label>
+    <p class="muted small" id="usage"></p>
+    <div class="actions">
+      <button value="cancel" formnovalidate class="ghost">Închide</button>
+      <button value="save" class="primary">Salvează</button>
+    </div>
+  </form>
+</dialog>
+
+<template id="placeTpl">
+  <fieldset class="place">
+    <legend></legend>
+    <input type="text" class="addr" placeholder="Strada, număr" autocomplete="off">
+    <div class="placeBtns">
+      <button type="button" class="find">Caută adresa</button>
+      <button type="button" class="here">Sunt aici acum</button>
+    </div>
+    <div class="coords muted small"></div>
+    <div class="choices"></div>
+  </fieldset>
+</template>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+node_modules/
+.wrangler/
+.dev.vars
+# Date personale (adrese, coordonate reale, rezultate de test) — nu se publică niciodată
+local/
+*.local.json
+*.local.*

@@ -1,0 +1,11 @@
+name = "ruta-acum"
+main = "src/worker.js"
+compatibility_date = "2025-10-01"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[vars]
+APP_VERSION = "0.1"
+CONTACT_URL = "https://github.com/motanesku/ruta-acum"
