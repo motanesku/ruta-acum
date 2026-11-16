@@ -4,14 +4,12 @@
 const PLACES = [['acasa', 'Acasă'], ['gradinita', 'Grădiniță'], ['birou', 'Birou']];
 const TRIPS = { dimineata: ['gradinita', 'birou'], seara: ['gradinita', 'acasa'] };
 const TRIP_START = { dimineata: 'acasa', seara: 'birou' };   // de unde pleci de obicei
-// tronsoane și dacă sunt implicit „cu copilul” (fără trotinetă: Lime e pentru un singur adult)
-const SEGMENTS = [['acasa', 'gradinita', true], ['gradinita', 'birou', false], ['birou', 'gradinita', false], ['gradinita', 'acasa', true]];
 const placeName = (k) => PLACES.find((x) => x[0] === k)?.[1] || k;
 const LIVE_EVERY = 30e3;          // sosiri live + vehicule
 const REPLAN_EVERY = 3 * 60e3;    // recalcul rută (Transitous are limită ~720/zi)
 const REPLAN_MIN_GAP = 60e3;      // nu recalculăm mai des de atât nici la cerere
 const KEY = 'rutaAcum.v1';
-const MODE = { WALK: 'Pe jos', TRAM: 'Tramvai', BUS: 'Autobuz', TROLLEYBUS: 'Troleibuz', SUBWAY: 'Metrou', SCOOTER: 'Trotinetă', UNLOCK: 'Găsit + deblocat trotineta', RAIL: 'Tren', REGIONAL_RAIL: 'Tren' };
+const MODE = { WALK: 'Pe jos', TRAM: 'Tramvai', BUS: 'Autobuz', TROLLEYBUS: 'Troleibuz', SUBWAY: 'Metrou', RAIL: 'Tren', REGIONAL_RAIL: 'Tren' };
 
 const $ = (s, el = document) => el.querySelector(s);
 const hm = (t) => new Date(t).toLocaleTimeString('ro-RO', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Bucharest' });
@@ -22,8 +20,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 function loadSettings() {
   let s = {};
   try { s = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { /* stocare indisponibilă */ }
-  const child = Object.fromEntries(SEGMENTS.map(([a, b, d]) => [`${a}>${b}`, d]));
-  return { places: {}, stop: 5, unlock: 6, kmh: 15, usage: {}, key: '', ...s, child: { ...child, ...(s.child || {}) } };
+  delete s.child; delete s.unlock; delete s.kmh;   // setări vechi, pentru trotinetă
+  return { places: {}, stop: 5, usage: {}, key: '', ...s };
 }
 function saveSettings() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { banner('Nu pot salva setările pe acest dispozitiv (stocare blocată).', 'warn'); } }
 let S = loadSettings();
@@ -35,7 +33,7 @@ function countPlan(n) {
 }
 
 // ---------- stare ----------
-const st = { pos: null, posErr: null, target: null, plan: null, planAt: 0, planFrom: null, live: {}, vehicles: [], busy: false, lastLive: 0 };
+const st = { pos: null, posErr: null, target: null, plan: null, sel: null, planAt: 0, planFrom: null, live: {}, vehicles: [], busy: false, lastLive: 0 };
 
 function banner(msg, kind = 'err') {
   const b = $('#banner');
@@ -74,8 +72,8 @@ function startPoint() {
   const v = $('#fromSel').value;
   if (v === 'gps') {
     if (!st.pos) throw new Error(st.posErr || 'Aștept poziția GPS…');
-    // ca să știm dacă tronsonul e „cu copilul”, ghicim locul de plecare:
-    // locul salvat cel mai apropiat (sub 300 m), altfel începutul obișnuit al traseului
+    // numele locului de plecare: locul salvat cel mai apropiat (sub 300 m),
+    // altfel începutul obișnuit al traseului
     let key = 'gps', best = 300;
     for (const [k] of PLACES) { const p = S.places[k]; if (p?.lat) { const d = dist(st.pos, p); if (d < best) { best = d; key = k; } } }
     if (key === 'gps' && TRIP_START[st.target]) key = TRIP_START[st.target];
@@ -112,11 +110,12 @@ async function replan(force = false) {
   st.busy = true; $('#refresh').classList.add('spin');
   if (!st.plan) $('#results').innerHTML = '<p class="hint">Caut variante…</p>';
   try {
-    const noscoot = pts.slice(1).map((p, i) => (S.child[`${pts[i].key}>${p.key}`] ? i : -1)).filter((i) => i >= 0);
-    const q = new URLSearchParams({ pts: pts.map((p) => `${p.lat.toFixed(5)},${p.lon.toFixed(5)}`).join(';'), stop: S.stop, unlock: S.unlock, kmh: S.kmh, noscoot: noscoot.join(',') });
+    const q = new URLSearchParams({ pts: pts.map((p) => `${p.lat.toFixed(5)},${p.lon.toFixed(5)}`).join(';'), stop: S.stop });
     const d = await getJSON('/api/plan?' + q);
     countPlan(d.transitousCalls || 0);
     st.plan = d; st.planAt = Date.now(); st.planFrom = pts[0]; st.pts = pts;
+    // păstrăm varianta aleasă pe hartă, dacă mai există
+    if (!d.variants.some((v) => v.id === st.sel && !v.error)) st.sel = null;
     banner(d.errors?.length ? 'Unele surse nu au răspuns: ' + d.errors.join('; ') : '', 'warn');
     render(); drawRoute(true);
     await refreshLive(true);
@@ -125,6 +124,9 @@ async function replan(force = false) {
     if (!st.plan) $('#results').innerHTML = '<p class="hint">Fără rezultat. Încearcă din nou cu ⟳.</p>';
   } finally { st.busy = false; $('#refresh').classList.remove('spin'); }
 }
+
+// varianta afișată pe hartă: cea atinsă, altfel câștigătoarea
+const shown = () => st.plan?.variants.find((v) => !v.error && v.id === st.sel) || st.plan?.variants.find((v) => !v.error);
 
 function transitLegs(v) { return (v.segs || []).flatMap((s) => s.legs.filter((l) => l.transit)); }
 const liveKey = (l) => `${l.tripId}~${l.from.stopId}`;
@@ -136,7 +138,7 @@ async function refreshLive(skipReplanCheck = false) {
   const legs = st.plan.variants.flatMap(transitLegs).filter((l) => l.tripId && l.from.stopId);
   const q = [...new Set(legs.map(liveKey))].join(',');
   const at = st.pos || st.planFrom;
-  const routes = [...new Set(transitLegs(winner || {}).map((l) => l.routeId).filter(Boolean))].join(',');
+  const routes = [...new Set(transitLegs(shown() || {}).map((l) => l.routeId).filter(Boolean))].join(',');
   const [tr, vh] = await Promise.allSettled([
     q ? getJSON('/api/trips?q=' + encodeURIComponent(q)) : Promise.resolve({ items: {} }),
     getJSON(`/api/vehicles?at=${at.lat.toFixed(5)},${at.lon.toFixed(5)}&r=1200&routes=${routes}`),
@@ -168,20 +170,12 @@ function leaveBy(v) {
 }
 
 // ---------- afișare ----------
-function limeLink() {
-  const ua = navigator.userAgent;
-  if (/Android/i.test(ua)) return 'intent://#Intent;scheme=lime;package=com.limebike;end';
-  if (/iPhone|iPad/i.test(ua)) return 'lime://';
-  return 'https://www.li.me/';
-}
-
 function legHtml(l, segIdx, showSeg, v) {
   let h = '';
   if (showSeg) {
     const a = st.pts[segIdx], b = st.pts[segIdx + 1];
     const names = `${a.key === 'gps' ? 'Poziția ta' : placeName(a.key)} → ${placeName(b.key)}`;
-    const child = v.noScootSegs?.includes(segIdx) ? ' · cu copilul, fără trotinetă' : '';
-    h += `<li class="seg">${names}${segIdx ? ` (după oprirea de ${st.plan.stopMin} min)` : ''}${child}</li>`;
+    h += `<li class="seg">${names}${segIdx ? ` (după oprirea de ${st.plan.stopMin} min)` : ''}</li>`;
   }
   const dur = mins(l.start, l.end);
   if (l.transit) {
@@ -197,7 +191,7 @@ function legHtml(l, segIdx, showSeg, v) {
     const km = l.dist ? ` · ${(l.dist / 1000).toFixed(1)} km` : '';
     const to = l.to?.name ? ` până la ${esc(l.to.name)}` : '';
     if (dur < 1 && l.mode === 'WALK') return h;
-    h += `<li><span>${esc(MODE[l.mode] || l.mode)}${to}<span class="muted"> · ${dur} min${km}</span>${l.estimate ? ' <span class="tag est">estimare</span>' : ''}</span><span class="when">${hm(l.start)}</span></li>`;
+    h += `<li><span>${esc(MODE[l.mode] || l.mode)}${to}<span class="muted"> · ${dur} min${km}</span></span><span class="when">${hm(l.start)}</span></li>`;
   }
   return h;
 }
@@ -211,17 +205,17 @@ function cardHtml(v, i) {
   const lines = transitLegs(v).map((l) => `<span class="line" style="background:${esc(l.color || '#666')};color:${esc(l.textColor || '#fff')}">${esc(l.line)}</span>`).join(' ');
   const multi = v.segs.length > 1;
   const legs = v.segs.map((s, si) => s.legs.map((l, li) => legHtml(l, si, multi && li === 0, v)).join('')).join('');
-  const est = v.estimate ? `<div class="est-note">Trotineta e o estimare (${st.plan.kmh} km/h + ${st.plan.unlockMin} min găsit/deblocat): verifică în aplicația Lime. <a href="${limeLink()}">Deschide Lime</a></div>` : '';
   const dup = v.sameAs ? `<div class="sub">Aceeași rută ca „${esc(st.plan.variants.find((x) => x.id === v.sameAs)?.label)}”.</div>` : '';
   let liveLine = '';
   if (firstT) { const d = liveDep(firstT); liveLine = `<span>${esc(firstT.line)}: ${d.src === 'live' ? 'live' : 'după orar'}</span>`; }
-  return `<div class="card ${i === 0 ? 'win' : ''} ${v.sameAs ? 'dup' : ''}">
+  const onMap = shown()?.id === v.id;
+  return `<div class="card pick ${i === 0 ? 'win' : ''} ${v.sameAs ? 'dup' : ''} ${onMap ? 'onmap' : ''}" data-v="${esc(v.id)}" role="button" tabindex="0" aria-pressed="${onMap}">
     <div class="head"><span class="title">${i === 0 ? '<span class="badge">CEL MAI RAPID</span>' : ''}${esc(v.label)}</span><span class="arr">${hm(v.end)}</span></div>
+    ${onMap ? '<div class="onmap-tag">● pe hartă</div>' : '<div class="onmap-hint">atinge ca să vezi traseul pe hartă</div>'}
     <div class="sub">${leave}<span>${mins(lb, v.end)} min total</span><span>pe jos ${v.walkMin} min</span><span>${v.transfers ? v.transfers + ' schimbări' : 'fără schimbări'}</span>${liveLine}</div>
     ${lines ? `<div style="margin-top:6px">${lines}</div>` : ''}
     ${dup}
-    ${i === 0 ? `<ul class="legs">${legs}</ul>` : `<details class="more"><summary>detalii</summary><ul class="legs">${legs}</ul></details>`}
-    ${est}
+    ${i === 0 || onMap ? `<ul class="legs">${legs}</ul>` : `<details class="more"><summary>detalii</summary><ul class="legs">${legs}</ul></details>`}
   </div>`;
 }
 
@@ -262,15 +256,14 @@ function drawMe() {
 
 function drawRoute(fit) {
   layers.route.clearLayers();
-  const v = st.plan?.variants.find((x) => !x.error);
+  const v = shown();
   if (!v) return;
   const all = [];
   for (const s of v.segs) for (const l of s.legs) {
     if (!l.geom) continue;
     const pts = decodePoly(l.geom.p, l.geom.prec); all.push(...pts);
     const style = l.transit ? { color: l.color || '#0f5c55', weight: 6, opacity: .9 }
-      : l.mode === 'SCOOTER' ? { color: '#2bb24c', weight: 5, dashArray: '2 8', opacity: .95 }
-        : { color: '#555', weight: 4, dashArray: '4 6', opacity: .8 };
+      : { color: '#555', weight: 4, dashArray: '4 6', opacity: .8 };
     L.polyline(pts, style).addTo(layers.route);
     if (l.transit) for (const p of [l.from, l.to]) L.circleMarker([p.lat, p.lon], { radius: 6, color: '#fff', weight: 2, fillColor: l.color || '#0f5c55', fillOpacity: 1 }).bindTooltip(`${esc(p.name)}`).addTo(layers.route);
   }
@@ -280,7 +273,7 @@ function drawRoute(fit) {
 
 function drawVehicles() {
   layers.veh.clearLayers();
-  const v = st.plan?.variants.find((x) => !x.error);
+  const v = shown();
   const mine = new Set(transitLegs(v || {}).map((l) => l.tripId));
   for (const x of st.vehicles) {
     const html = `<div class="veh ${mine.has(x.tripId) ? 'mine' : ''}" style="background:${esc(x.color || '#555')}">${esc(x.line)}</div>`;
@@ -333,8 +326,7 @@ function openSettings() {
   S._draft = JSON.parse(JSON.stringify(S.places));
   renderPlaces();
   const f = $('#settingsForm');
-  f.stop.value = S.stop; f.unlock.value = S.unlock; f.kmh.value = S.kmh; f.key.value = S.key || '';
-  $('#segs').innerHTML = SEGMENTS.map(([a, b]) => `<label class="row">${placeName(a)} → ${placeName(b)} <span><input type="checkbox" data-seg="${a}>${b}" ${S.child[`${a}>${b}`] ? 'checked' : ''}> cu copilul</span></label>`).join('');
+  f.stop.value = S.stop; f.key.value = S.key || '';
   const u = S.usage.day === new Date().toISOString().slice(0, 10) ? S.usage : { plans: 0, calls: 0 };
   $('#usage').textContent = `Azi: ${u.plans} calcule de rută, ${u.calls} cereri Transitous de pe acest telefon (limita serviciului: ~720/zi pentru toți utilizatorii aplicației).`;
   $('#settings').showModal();
@@ -349,9 +341,8 @@ $('#settings').addEventListener('close', () => {
       if (d) d.addr = $('.addr', el).value.trim();
     }
     S.places = S._draft;
-    S.stop = +f.stop.value || 0; S.unlock = +f.unlock.value || 0; S.kmh = +f.kmh.value || 15;
+    S.stop = +f.stop.value || 0;
     S.key = f.key.value.trim();
-    document.querySelectorAll('[data-seg]').forEach((c) => { S.child[c.dataset.seg] = c.checked; });
     delete S._draft; saveSettings();
     if (st.target) { st.plan = null; replan(true); }
   } else delete S._draft;
@@ -360,9 +351,25 @@ $('#settings').addEventListener('close', () => {
 // ---------- evenimente ----------
 document.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => {
   document.querySelectorAll('[data-go]').forEach((x) => x.classList.toggle('active', x === b));
-  st.target = b.dataset.go; st.plan = null; banner('');
+  st.target = b.dataset.go; st.plan = null; st.sel = null; banner('');
   replan(true);
 }));
+// atingi o variantă → îi desenez traseul pe hartă (și vehiculele de pe liniile ei)
+function selectVariant(id) {
+  if (!st.plan || shown()?.id === id) return;
+  st.sel = id;
+  render(); drawRoute(true); drawVehicles();
+  $('#map').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  refreshLive(true);
+}
+$('#results').addEventListener('click', (e) => {
+  if (e.target.closest('summary, a')) return;
+  const c = e.target.closest('.card.pick'); if (c) selectVariant(c.dataset.v);
+});
+$('#results').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const c = e.target.closest('.card.pick'); if (c) { e.preventDefault(); selectVariant(c.dataset.v); }
+});
 $('#refresh').onclick = () => (Date.now() - st.planAt > REPLAN_MIN_GAP ? replan(true) : refreshLive());
 $('#openSettings').onclick = openSettings;
 $('#fromSel').onchange = () => { if (st.target) { st.plan = null; replan(true); } };

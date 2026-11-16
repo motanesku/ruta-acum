@@ -47,6 +47,10 @@ button { font: inherit; color: inherit; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
 .card.win { background: var(--win); border: 2px solid var(--accent); }
 .card.dup, .card.err { opacity: .65; }
+.card.pick { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.card.onmap { box-shadow: 0 0 0 3px var(--accent); opacity: 1; }
+.onmap-tag { font-size: 12px; font-weight: 700; color: var(--accent); margin-top: 2px; }
+.onmap-hint { font-size: 12px; color: var(--muted); margin-top: 2px; }
 .card .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .card .title { font-weight: 600; }
 .card .badge { font-size: 12px; font-weight: 700; letter-spacing: .03em; color: var(--accent-ink); background: var(--accent); padding: 2px 7px; border-radius: 6px; margin-right: 6px; vertical-align: 2px; }
@@ -64,9 +68,6 @@ button { font: inherit; color: inherit; }
 .tag { font-size: 12px; font-weight: 600; padding: 1px 6px; border-radius: 6px; white-space: nowrap; }
 .tag.live { color: var(--live); border: 1px solid var(--live); }
 .tag.sched { color: var(--sched); border: 1px solid var(--sched); }
-.tag.est { color: var(--warn); border: 1px solid var(--warn); }
-.est-note { margin-top: 8px; font-size: 13px; color: var(--warn); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.est-note a { font-weight: 600; padding: 6px 10px; border-radius: 8px; border: 1px solid currentColor; text-decoration: none; color: inherit; }
 details.more summary { cursor: pointer; color: var(--muted); font-size: 14px; padding: 4px 0; }
 
 .credits { padding: 18px 16px 8px; font-size: 12px; color: var(--muted); }

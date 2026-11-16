@@ -14,7 +14,7 @@ import ROUTES from './routes.json';
 
 const RT = 'https://gtfs.tpbi.ro/api/gtfs-rt/';
 const TRANSITOUS = 'https://api.transitous.org/api/v5/plan';
-const OSRM = { foot: 'https://routing.openstreetmap.de/routed-foot/route/v1/foot/', bike: 'https://routing.openstreetmap.de/routed-bike/route/v1/bike/' };
+const OSRM = { foot: 'https://routing.openstreetmap.de/routed-foot/route/v1/foot/' };
 const NOMINATIM = 'https://nominatim.openstreetmap.org/search';
 const FEED_PREFIX = 'ro-Bucuresti-Ilfov_';
 
@@ -64,7 +64,6 @@ const routeInfo = (gtfsRouteId) => ROUTES[gtfsRouteId] || null;
 const MODESETS = {
   all: {},                                                       // orice transport public
   tram: { transitModes: 'TRAM' },                                // doar tramvai
-  bikeMetro: { preTransitModes: 'BIKE', transitModes: 'SUBWAY', maxPreTransitTime: '1800' }, // trotinetă → metrou
 };
 
 async function transitous(env, from, to, timeMs, set) {
@@ -109,24 +108,7 @@ function normItinerary(it) {
   return { start: legs[0].start, end: legs.at(-1).end, legs };
 }
 
-// Trotinetă → metrou: recalculăm tronsonul pe roți cu viteza și timpul de deblocare
-// ale utilizatorului. Plecarea se mută mai devreme, sosirea rămâne aceeași.
-function adjustScooterLegs(it, o) {
-  const legs = it.legs.map((l) => ({ ...l }));
-  for (let i = 0; i < legs.length; i++) {
-    const l = legs[i];
-    if (l.mode !== 'BIKE') continue;
-    const rideMs = ((l.dist || 0) / (o.kmh / 3.6)) * 1000;
-    l.mode = 'SCOOTER'; l.estimate = true;
-    if (i === 0) l.start = l.end - rideMs;   // înainte de transport: trebuie să ajungem la aceeași oră
-    else l.end = l.start + rideMs;           // după transport: plecăm la aceeași oră
-    legs.splice(i, 0, { mode: 'UNLOCK', start: l.start - o.unlock * 60000, end: l.start, estimate: true, transit: false, from: l.from, to: l.from });
-    i++;
-  }
-  return { start: legs[0].start, end: legs.at(-1).end, legs, estimate: true };
-}
-
-// ---------- OSRM (pe jos / trotinetă directă) ----------
+// ---------- OSRM (pe jos) ----------
 async function osrm(env, kind, from, to) {
   const url = `${OSRM[kind]}${from.lon.toFixed(5)},${from.lat.toFixed(5)};${to.lon.toFixed(5)},${to.lat.toFixed(5)}?overview=full&geometries=polyline6`;
   const d = await cachedFetch(env, url, 3600);
@@ -136,18 +118,6 @@ async function osrm(env, kind, from, to) {
 
 function walkOption(w, ready, from, to) {
   return { start: ready, end: ready + w.dur, legs: [{ mode: 'WALK', start: ready, end: ready + w.dur, dist: w.dist, geom: w.geom, from, to, transit: false }] };
-}
-
-function scooterOption(b, ready, from, to, o) {
-  const ride = (b.dist / (o.kmh / 3.6)) * 1000;
-  const t1 = ready + o.unlock * 60000;
-  return {
-    start: ready, end: t1 + ride, estimate: true,
-    legs: [
-      { mode: 'UNLOCK', start: ready, end: t1, estimate: true, transit: false },
-      { mode: 'SCOOTER', start: t1, end: t1 + ride, dist: b.dist, geom: b.geom, from, to, estimate: true, transit: false },
-    ],
-  };
 }
 
 // Alege itinerariul cu cea mai devreme sosire care pleacă după `ready`.
@@ -163,20 +133,15 @@ function pick(list, ready) {
 const FAMILIES = [
   { id: 'tram', label: 'Doar tramvai', set: 'tram' },
   { id: 'pt', label: 'Tramvai / autobuz + metrou', set: 'all' },
-  { id: 'scooterMetro', label: 'Trotinetă până la metrou', set: 'bikeMetro', estimate: true },
-  { id: 'scooter', label: 'Trotinetă Lime', osrm: 'bike', estimate: true },
   { id: 'walk', label: 'Pe jos', osrm: 'foot' },
 ];
 
 async function plan(env, pts, o) {
   const now = o.time || Date.now();
   const multi = pts.length > 2;
-  const nSeg = pts.length - 1;
-  const noScoot = o.noScoot || new Set();            // tronsoane „cu copilul”: fără trotinetă
-  const allNoScoot = [...Array(nSeg).keys()].every((i) => noScoot.has(i));
   const fams = multi ? [...FAMILIES, { id: 'combo', label: 'Combinat (cel mai rapid pe fiecare tronson)' }] : FAMILIES;
   const ready = Object.fromEntries(fams.map((f) => [f.id, now]));
-  const result = Object.fromEntries(fams.map((f) => [f.id, { segs: [], error: f.estimate && allNoScoot ? 'fără trotinetă: tronson cu copilul' : null }]));
+  const result = Object.fromEntries(fams.map((f) => [f.id, { segs: [], error: null }]));
   const errors = [];
   let calls = 0;
 
@@ -185,15 +150,12 @@ async function plan(env, pts, o) {
     const fromP = { name: null, lat: from.lat, lon: from.lon }, toP = { name: null, lat: to.lat, lon: to.lon };
     const alive = fams.filter((f) => !result[f.id].error);
     const t0 = Math.min(...alive.map((f) => ready[f.id]));
-    const segNoScoot = noScoot.has(s);
-    const sets = segNoScoot ? ['all', 'tram'] : ['all', 'tram', 'bikeMetro'];
-    const [tr, foot, bike] = await Promise.all([
+    const sets = ['all', 'tram'];
+    const [tr, foot] = await Promise.all([
       Promise.all(sets.map((k) => { calls++; return transitous(env, from, to, t0, k).catch((e) => { errors.push(`Transitous (${k}): ${e.message}`); return null; }); })),
       osrm(env, 'foot', from, to).catch((e) => { errors.push('OSRM pe jos: ' + e.message); return null; }),
-      osrm(env, 'bike', from, to).catch((e) => { errors.push('OSRM trotinetă: ' + e.message); return null; }),
     ]);
     const lists = Object.fromEntries(sets.map((k, i) => [k, tr[i]]));
-    if (lists.bikeMetro) lists.bikeMetro = lists.bikeMetro.map((it) => adjustScooterLegs(it, o));
 
     // dacă nu găsim nimic după `ready` în lista de la t0, mai întrebăm o dată la `ready`
     const pickOrRefetch = async (set, r) => {
@@ -201,36 +163,22 @@ async function plan(env, pts, o) {
       let it = pick(lists[set], r);
       if (!it && r - t0 > 60000) {
         calls++;
-        let l2 = await transitous(env, from, to, r, set).catch(() => null);
-        if (l2 && set === 'bikeMetro') l2 = l2.map((x) => adjustScooterLegs(x, o));
+        const l2 = await transitous(env, from, to, r, set).catch(() => null);
         it = pick(l2, r);
       }
       return it;
     };
 
     const options = async (f, r) => {
-      // pe tronsoanele cu copilul, variantele cu trotinetă folosesc cea mai rapidă variantă fără trotinetă
-      if (f.estimate && segNoScoot) {
-        const c = await Promise.all(FAMILIES.filter((g) => !g.estimate).map((g) => options(g, r)));
-        const best = c.filter(Boolean).sort((a, b) => a.end - b.end)[0];
-        return best ? { ...best, noScoot: true } : null;
-      }
       if (f.osrm === 'foot') return foot ? walkOption(foot, r, fromP, toP) : null;
-      if (f.osrm === 'bike') return bike ? scooterOption(bike, r, fromP, toP, o) : null;
-      const it = await pickOrRefetch(f.set, r);
-      // trotinetă → metrou: unde metroul nu ajută pe un tronson, rămâne trotineta directă
-      if (f.set === 'bikeMetro' && bike) {
-        const direct = scooterOption(bike, r, fromP, toP, o);
-        if (!it || direct.end <= it.end) return { ...direct, fallback: true };
-      }
-      return it;
+      return pickOrRefetch(f.set, r);
     };
 
     for (const f of alive) {
       const r = ready[f.id];
       let it;
       if (f.id === 'combo') {
-        const cands = await Promise.all(FAMILIES.filter((g) => !(segNoScoot && g.estimate)).map((g) => options(g, r)));
+        const cands = await Promise.all(FAMILIES.map((g) => options(g, r)));
         it = cands.filter(Boolean).sort((a, b) => a.end - b.end)[0] || null;
       } else it = await options(f, r);
       if (!it) { result[f.id].error = s === 0 ? 'nicio rută găsită' : `nicio rută pe tronsonul ${s + 1}`; continue; }
@@ -247,8 +195,6 @@ async function plan(env, pts, o) {
     const walkMs = legs.filter((l) => l.mode === 'WALK').reduce((a, l) => a + (l.end - l.start), 0);
     return {
       id: f.id, label: f.label,
-      estimate: r.segs.some((x) => x.estimate),
-      noScootSegs: r.segs.map((x, i) => (x.noScoot ? i : -1)).filter((i) => i >= 0),
       start: r.segs[0].start, end: r.segs.at(-1).end,
       walkMin: Math.round(walkMs / 60000),
       transfers: r.segs.reduce((a, x) => a + Math.max(0, x.legs.filter((l) => l.transit).length - 1), 0),
@@ -260,11 +206,11 @@ async function plan(env, pts, o) {
   // aceeași rută găsită de două familii (ex. „tramvai/autobuz” = „doar tramvai”) → marcăm duplicatul
   const sig = (v) => v.segs?.map((s) => s.legs.map((l) => `${l.mode}:${l.tripId || ''}`).join('|')).join('#');
   const seen = new Map();
-  const prio = ['tram', 'pt', 'scooter', 'walk', 'scooterMetro', 'combo'];
+  const prio = ['tram', 'pt', 'walk', 'combo'];
   for (const v of [...variants].sort((a, b) => prio.indexOf(a.id) - prio.indexOf(b.id))) { if (v.error) continue; const k = sig(v); if (seen.has(k)) v.sameAs = seen.get(k); else seen.set(k, v.id); }
 
   variants.sort((a, b) => (a.error ? 1 : 0) - (b.error ? 1 : 0) || (a.end - b.end));
-  return { now, stopMin: o.stop, unlockMin: o.unlock, kmh: o.kmh, variants, errors, transitousCalls: calls };
+  return { now, stopMin: o.stop, variants, errors, transitousCalls: calls };
 }
 
 // ---------- GTFS-RT ----------
@@ -370,9 +316,8 @@ async function api(req, env, url) {
       if (pts.length < 2 || pts.length > 4) throw new HttpError(400, 'pts: 2–4 puncte lat,lon separate prin ;');
       await rateLimit(env, 'plan', num(env.PLAN_PER_HOUR, 30, 1, 1000));
       return json(await plan(env, pts, {
-        stop: num(q.get('stop'), 5, 0, 60), unlock: num(q.get('unlock'), 6, 0, 30), kmh: num(q.get('kmh'), 15, 5, 25),
+        stop: num(q.get('stop'), 5, 0, 60),
         time: q.get('t') ? num(q.get('t'), 0, 0, 1e15) : 0,
-        noScoot: new Set((q.get('noscoot') || '').split(',').filter((x) => x !== '').map(Number)),
       }));
     }
     case '/api/trips': return json(await trips(env, q.get('q') || ''));
