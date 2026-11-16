@@ -352,6 +352,7 @@ $('#settings').addEventListener('close', () => {
 document.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => {
   document.querySelectorAll('[data-go]').forEach((x) => x.classList.toggle('active', x === b));
   st.target = b.dataset.go; st.plan = null; st.sel = null; banner('');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
   replan(true);
 }));
 // atingi o variantă → îi desenez traseul pe hartă (și vehiculele de pe liniile ei)
